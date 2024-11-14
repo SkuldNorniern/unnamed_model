@@ -1,0 +1,39 @@
+[project]
+name = "port-nanogpt"
+version = "3.11"
+description = "Add your description here"
+dependencies = [
+    "torch==2.4.1",
+    "torchvision==0.19.1",
+    "torchaudio==2.4.1",
+    "tiktoken>=0.7.0",
+    "pandas>=2.2.2",
+    "pyarrow>=17.0.0",
+    "fastparquet>=2024.5.0",
+    "tqdm>=4.64.1",
+    "safetensors>=0.4.5",
+    "datasets>=3.1.0",
+]
+readme = "README.md"
+requires-python = ">= 3.10"
+
+[project.scripts]
+"port-nanogpt" = "port_nanogpt:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.rye]
+managed = true
+dev-dependencies = []
+
+# [[tool.rye.sources]]
+# name = "pytorch"
+# url = "https://download.pytorch.org/whl/cu124"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/port_nanogpt"]

@@ -17,6 +17,7 @@ $ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123
 """
 
 import os
+import platform
 import time
 import math
 import pickle
@@ -72,7 +73,11 @@ def train(file_path):
     # DDP settings
     backend = 'nccl' # 'nccl', 'gloo', etc.
     # system
-    device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
+    # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
+    if platform.system() == 'Darwin':
+        device = 'mps'
+    else:
+        device = 'cuda'
     dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
     compile = True # use PyTorch 2.0 to compile the model to be faster
     # -----------------------------------------------------------------------------
