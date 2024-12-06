@@ -15,7 +15,7 @@ def sample():
     start = "how about a game where you can create your own characters and explore a world with them?" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
     num_samples = 10 # number of samples to draw
     max_new_tokens = 500 # number of tokens generated in each sample
-    temperature = 0.8 # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
+    temperature = 0.7 # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
     top_k = 200 # retain only the top_k most likely tokens, clamp others to have 0 probability
     seed = 1337
     device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1', etc.
