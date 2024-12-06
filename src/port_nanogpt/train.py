@@ -22,6 +22,8 @@ import time
 import math
 import pickle
 from contextlib import nullcontext
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
 
 import numpy as np
 import torch
@@ -32,14 +34,59 @@ from tqdm import tqdm
 from port_nanogpt.model import GPTConfig, GPT
 
 
+class LossPlotter:
+    def __init__(self):
+        self.train_losses = []
+        self.val_losses = []
+        self.iterations = []
+        
+        # Setup the plot
+        plt.ion()  # Interactive mode on
+        self.fig, self.ax = plt.subplots(figsize=(10, 6))
+        self.train_line, = self.ax.plot([], [], 'b-', label='Train Loss')
+        self.val_line, = self.ax.plot([], [], 'r-', label='Val Loss')
+        
+        self.ax.set_xlabel('Iterations')
+        self.ax.set_ylabel('Loss')
+        self.ax.set_title('Training Progress')
+        self.ax.legend()
+        self.ax.grid(True)
+        
+        # Initialize limits
+        self.ax.set_xlim(0, 100)
+        self.ax.set_ylim(0, 5)
+        
+    def update_plot(self, iter_num, train_loss, val_loss):
+        self.iterations.append(iter_num)
+        self.train_losses.append(train_loss)
+        self.val_losses.append(val_loss)
+        
+        # Update lines
+        self.train_line.set_data(self.iterations, self.train_losses)
+        self.val_line.set_data(self.iterations, self.val_losses)
+        
+        # Adjust limits if needed
+        if iter_num >= self.ax.get_xlim()[1]:
+            self.ax.set_xlim(0, iter_num * 1.5)
+        
+        y_max = max(max(self.train_losses), max(self.val_losses))
+        y_min = min(min(self.train_losses), min(self.val_losses))
+        if y_max > self.ax.get_ylim()[1] or y_min < self.ax.get_ylim()[0]:
+            self.ax.set_ylim(y_min * 0.9, y_max * 1.1)
+        
+        # Draw and flush
+        self.fig.canvas.draw()
+        self.fig.canvas.flush_events()
+
+
 def train(file_path):
     # -----------------------------------------------------------------------------
     # default config values designed to train a gpt2 (124M) on OpenWebText
     # I/O
     out_dir = 'out'
-    eval_interval = 500
+    eval_interval = 50
     log_interval = 5
-    eval_iters = 500
+    eval_iters = 50
     eval_only = False # if True, script exits right after the first eval
     always_save_checkpoint = False # if True, always save a checkpoint after each eval
     init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
@@ -48,7 +95,7 @@ def train(file_path):
     wandb_project = 'owt'
     wandb_run_name = 'Luminarium' # 'run' + str(time.time())
     # data
-    dataset = 'mixed'
+    dataset = 'c4'
     gradient_accumulation_steps = 1 # used to simulate larger batch sizes
     batch_size = 1 # if gradient_accumulation_steps > 1, this is the micro-batch size
     block_size = 1024
@@ -255,6 +302,10 @@ def train(file_path):
         import wandb
         wandb.init(project=wandb_project, name=wandb_run_name, config=config)
 
+    # Initialize loss plotter if master process
+    if master_process:
+        loss_plotter = LossPlotter()
+
     # training loop
     X, Y = get_batch('train') # fetch the very first batch
     t0 = time.time()
@@ -298,6 +349,9 @@ def train(file_path):
                     }
                     print(f"saving best checkpoint to {out_dir}")
                     torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
+            # Update the live plot if master process
+            if master_process:
+                loss_plotter.update_plot(iter_num, losses['train'], losses['val'])
         if iter_num == 0 and eval_only:
             break
 
