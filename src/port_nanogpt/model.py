@@ -17,7 +17,8 @@ import torch.nn as nn
 from torch.nn import LayerNorm, GELU, RMSNorm
 from torch.nn import functional as F
 from safetensors.torch import save_file, load_file  # Import missing functions
-
+import torch._dynamo
+torch._dynamo.config.suppress_errors = True
 
 from .activation import Swish  # Add this import at the top of the file
 from .layers import  MiniRMSNorm
@@ -28,19 +29,38 @@ from .attention import CausalSelfAttention
 
 
 class MLP(nn.Module):
-    """Feed-forward neural network module."""
-
+    """Enhanced feed-forward neural network module with configurable expansion."""
+    
     def __init__(self, config):
         super().__init__()
-        self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
-        self.swish = GELU()  
-        self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
+        self.expansion_factor = getattr(config, 'mlp_expansion_factor', 4)
+        hidden_dim = int(config.n_embd * self.expansion_factor)
+        
+        self.fc1 = nn.Linear(config.n_embd, hidden_dim, bias=config.bias)
+        self.fc2 = nn.Linear(hidden_dim, config.n_embd, bias=config.bias)
+        
+        # Use actual GELU activation
+        self.act = Swish() # Using tanh approximation for better performance
         self.dropout = nn.Dropout(config.dropout)
+        
+        # Proper initialization
+        self._init_weights()
+    
+    def _init_weights(self):
+        # Initialize with scaled normal distribution
+        std = 0.02
+        nn.init.normal_(self.fc1.weight, mean=0.0, std=std)
+        nn.init.normal_(self.fc2.weight, mean=0.0, std=std)
+        if self.fc1.bias is not None:
+            nn.init.zeros_(self.fc1.bias)
+        if self.fc2.bias is not None:
+            nn.init.zeros_(self.fc2.bias)
 
     def forward(self, x):
-        x = self.c_fc(x)
-        x = self.swish(x)
-        x = self.c_proj(x)
+        x = self.fc1(x)
+        x = self.act(x)
+        x = self.dropout(x)
+        x = self.fc2(x)
         x = self.dropout(x)
         return x
 
@@ -49,9 +69,9 @@ class Block(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.ln_1 = RMSNorm(config.n_embd)
+        self.ln_1 = LayerNorm(config.n_embd)
         self.attn = CausalSelfAttention(config)
-        self.ln_2 = RMSNorm(config.n_embd)
+        self.ln_2 = LayerNorm(config.n_embd)
         self.mlp = MLP(config)
 
     def forward(self, x):
@@ -116,53 +136,53 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    # def forward(self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-    #     device = idx.device
-    #     b, t = idx.size()
-    #     assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-    #     pos = torch.arange(0, t, dtype=torch.long, device=device)  # shape (t)
-    #     # Forward the GPT model
-    #     tok_emb = self.transformer.wte(idx)  # Token embeddings
-    #     pos_emb = self.transformer.wpe(pos)  # Position embeddings
-    #     x = self.transformer.drop(tok_emb + pos_emb)
-    #     for block in self.transformer.h:
-    #         x = block(x)
-    #     x = self.transformer.ln_f(x)
-    #     logits = self.lm_head(x)
-    #     if targets is not None:
-    #         # Calculate loss if targets are provided
-    #         loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
-    #     else:
-    #         loss = None
-    #     return logits, loss
     def forward(self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-        # Use gradient checkpointing
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-
-        # Embedding and positional encoding
+        pos = torch.arange(0, t, dtype=torch.long, device=device)  # shape (t)
+        # Forward the GPT model
         tok_emb = self.transformer.wte(idx)  # Token embeddings
-        pos_emb = self.transformer.wpe(torch.arange(0, t, dtype=torch.long, device=device))  # Position embeddings
+        pos_emb = self.transformer.wpe(pos)  # Position embeddings
         x = self.transformer.drop(tok_emb + pos_emb)
-
-        # Define a function for checkpointing
-        def custom_forward(module):
-            def forward(*inputs):
-                return module(*inputs)
-            return forward
-
         for block in self.transformer.h:
-            x = torch.utils.checkpoint.checkpoint(custom_forward(block), x)
-
+            x = block(x)
         x = self.transformer.ln_f(x)
         logits = self.lm_head(x)
-
         if targets is not None:
+            # Calculate loss if targets are provided
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
         else:
             loss = None
         return logits, loss
+    # def forward(self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    #     # Use gradient checkpointing
+    #     device = idx.device
+    #     b, t = idx.size()
+    #     assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+
+    #     # Embedding and positional encoding
+    #     tok_emb = self.transformer.wte(idx)  # Token embeddings
+    #     pos_emb = self.transformer.wpe(torch.arange(0, t, dtype=torch.long, device=device))  # Position embeddings
+    #     x = self.transformer.drop(tok_emb + pos_emb)
+
+    #     # Define a function for checkpointing
+    #     def custom_forward(module):
+    #         def forward(*inputs):
+    #             return module(*inputs)
+    #         return forward
+
+    #     for block in self.transformer.h:
+    #         x = torch.utils.checkpoint.checkpoint(custom_forward(block), x)
+
+    #     x = self.transformer.ln_f(x)
+    #     logits = self.lm_head(x)
+
+    #     if targets is not None:
+    #         loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+    #     else:
+    #         loss = None
+    #     return logits, loss
 
 
     def crop_block_size(self, block_size):
